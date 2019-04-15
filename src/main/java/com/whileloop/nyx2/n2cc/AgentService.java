@@ -68,8 +68,9 @@ public class AgentService extends NX2Logger implements SServerCallback {
     }
     
     public final void readyServer() {
-        debug("Putting server into Ready state");
+        debug("Putting Agent Service into Ready state");
         this.serverReady = true;
+        info("---------- Agent Service READY ----------");
     }
     
     public boolean isServerReady() {
@@ -101,6 +102,13 @@ public class AgentService extends NX2Logger implements SServerCallback {
     @Override
     public void OnDisconnect(SServer server, SClient client) {
         debug("Client disconnected %s", getClientConnectionInfo(client));
+        RemoteN2Agent agent = RemoteN2Agent.findAgent(client.getAttachedUuid());
+        if (agent == null) {
+            debug("Ignoring disconnection of unknown client %s", getClientConnectionInfo(client));
+            return;
+        }
+        
+        agent.OnDisconnect();
     }
     
     @Override
@@ -111,6 +119,14 @@ public class AgentService extends NX2Logger implements SServerCallback {
         } else if (msg instanceof HeartBeatMessage) {
             client.Send(msg);
         }
+        
+        RemoteN2Agent agent = RemoteN2Agent.findAgent(client.getAttachedUuid());
+        if (agent == null) {
+            debug("Ignoring %s from unknown client %s", msg.getClass().getName(), getClientConnectionInfo(client));
+            return;
+        }
+        
+        agent.OnRemoteMessage(msg);
     }
     
     @Override
@@ -142,14 +158,15 @@ public class AgentService extends NX2Logger implements SServerCallback {
     }
     
     private void handleLoginMessage(SClient client, LoginMessage msg) {
-        debug("LoginMessage recieved from: %s. Email:%s Password:%s",
-                getClientConnectionInfo(client),
-                msg.getEmail(), msg.getPassword()); // TODO: Remove log
-        // TODO: Validate
+        debug("LoginMessage recieved from: %s. Mechanism: %s",
+                getClientConnectionInfo(client), msg.getMechanism().toString());
+        // TODO: Validate credentials
+        
         LoginResponseMessage respMsg = new LoginResponseMessage(true);
         respMsg.setAuthToken(generateSecureToken());
         debug("Sending LoginResponseMessage to client %s", getClientConnectionInfo(client));
         client.Send(respMsg);
+        RemoteN2Agent remoteClient = new RemoteN2Agent(client, respMsg.getAgentUUID());
     }
     
     private String generateSecureToken() {
