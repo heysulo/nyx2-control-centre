@@ -23,7 +23,6 @@
  */
 package com.whileloop.nyx2.n2cc;
 
-import com.whileloop.nyx2.messages.HeartBeatMessage;
 import com.whileloop.nyx2.messages.LoginMessage;
 import com.whileloop.nyx2.messages.LoginResponseMessage;
 import com.whileloop.nyx2.messages.ServerStatusMessage;
@@ -109,6 +108,7 @@ public class AgentService extends NX2Logger implements SServerCallback {
         }
 
         agent.OnDisconnect();
+        RemoteN2Agent.deregisterAgent(client.getAttachedUuid());
     }
 
     @Override
@@ -116,8 +116,6 @@ public class AgentService extends NX2Logger implements SServerCallback {
         debug("OnMessage");
         if (msg instanceof LoginMessage) {
             handleLoginMessage(client, (LoginMessage) msg);
-        } else if (msg instanceof HeartBeatMessage) {
-            client.Send(msg);
         }
 
         RemoteN2Agent agent = RemoteN2Agent.findAgent(client.getAttachedUuid());

@@ -24,6 +24,7 @@
 package com.whileloop.nyx2.n2cc;
 
 import com.whileloop.nyx2.messages.HeartBeatMessage;
+import com.whileloop.nyx2.messages.TerminationMessage;
 import com.whileloop.nyx2.utils.NX2IntervalClock;
 import com.whileloop.nyx2.utils.NX2Logger;
 import com.whileloop.sendit.client.SClient;
@@ -54,6 +55,13 @@ public class RemoteN2Agent extends NX2Logger implements NX2IntervalClock.NX2Inte
         return connections.get(uuid);
     }
 
+    public synchronized static void deregisterAgent(UUID uuid) {
+        if (uuid == null) {
+            return;
+        }
+        connections.remove(uuid);
+    }
+
     private final SClient client;
     private final UUID agentUUID;
     private final NX2IntervalClock hbScanner;
@@ -62,6 +70,7 @@ public class RemoteN2Agent extends NX2Logger implements NX2IntervalClock.NX2Inte
     private int bhMissCount = 0;
 
     public RemoteN2Agent(SClient client, UUID uuid) {
+        setVerboseLevel(Loglevel.DEBUG);
         this.client = client;
         this.agentUUID = uuid;
         this.hbScanner = new NX2IntervalClock(agentEventLoopGroup, this, 5, TimeUnit.SECONDS);
@@ -79,9 +88,11 @@ public class RemoteN2Agent extends NX2Logger implements NX2IntervalClock.NX2Inte
     public void OnRemoteMessage(SMessage msg) {
         if (msg instanceof HeartBeatMessage) {
             handleHeartBeatMessage((HeartBeatMessage) msg);
+        } else {
+            debug("Unknown message ignored: %s", msg.getClass().getName());
         }
     }
-    
+
     public synchronized void OnDisconnect() {
         debug("RemoteN2A disconnected. Removing timers");
         this.hbScanner.stop();
@@ -89,8 +100,10 @@ public class RemoteN2Agent extends NX2Logger implements NX2IntervalClock.NX2Inte
 
     private synchronized void handleHeartBeatMessage(HeartBeatMessage heartBeatMessage) {
         debug("HB Recieved from %s", getConnectionInfo());
+        client.Send(heartBeatMessage);
         this.lastHB = System.currentTimeMillis();
         this.bhMissCount = 0;
+        checkRemoteSystemTime(heartBeatMessage.getCreationTime());
     }
 
     private synchronized void handleHbMissCountReached() {
@@ -99,11 +112,23 @@ public class RemoteN2Agent extends NX2Logger implements NX2IntervalClock.NX2Inte
         this.client.closeConnection();
     }
 
-    private synchronized void clockHbScannerFired() {
-        if ((System.currentTimeMillis() - this.lastHB) > this.hbScanner.getIntervalToSeconds()) {
-            this.bhMissCount++;
-            warn("HB missed %d/%d from %s", this.bhMissCount, this.allowedHbMisses, getConnectionInfo());
+    private void checkRemoteSystemTime(long time) {
+        long timeDifference;
+        timeDifference = System.currentTimeMillis() - time;
+
+        if (Math.abs(timeDifference) > 300000) {
+            warn("Unacceptable time difference detected: %dms. Sending termination request", timeDifference);
+            client.Send(new TerminationMessage("Unacceptable time difference detected. Please check your system clock"));
         }
+    }
+
+    private synchronized void clockHbScannerFired() {
+        if ((System.currentTimeMillis() - this.lastHB) <= this.hbScanner.getIntervalToSeconds()) {
+            return;
+        }
+
+        this.bhMissCount++;
+        warn("HB missed %d/%d from %s", this.bhMissCount, this.allowedHbMisses, getConnectionInfo());
 
         if (this.bhMissCount >= this.allowedHbMisses) {
             handleHbMissCountReached();
