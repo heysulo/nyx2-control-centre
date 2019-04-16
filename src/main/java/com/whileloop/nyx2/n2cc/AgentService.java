@@ -32,9 +32,10 @@ import com.whileloop.sendit.client.SClient;
 import com.whileloop.sendit.messages.SMessage;
 import com.whileloop.sendit.server.SServer;
 import io.netty.channel.nio.NioEventLoopGroup;
-import java.security.SecureRandom;
 import java.security.cert.CertificateException;
-import java.util.Base64;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import javax.net.ssl.SSLException;
 
 /**
@@ -116,6 +117,7 @@ public class AgentService extends NX2Logger implements SServerCallback {
         debug("OnMessage");
         if (msg instanceof LoginMessage) {
             handleLoginMessage(client, (LoginMessage) msg);
+            return;
         }
 
         RemoteN2Agent agent = RemoteN2Agent.findAgent(client.getAttachedUuid());
@@ -158,20 +160,39 @@ public class AgentService extends NX2Logger implements SServerCallback {
     private void handleLoginMessage(SClient client, LoginMessage msg) {
         debug("LoginMessage recieved from: %s. Mechanism: %s",
                 getClientConnectionInfo(client), msg.getMechanism().toString());
-        // TODO: Validate credentials
 
-        LoginResponseMessage respMsg = new LoginResponseMessage(true);
-        respMsg.setAuthToken(generateSecureToken());
-        debug("Sending LoginResponseMessage to client %s", getClientConnectionInfo(client));
-        client.Send(respMsg);
-        RemoteN2Agent remoteClient = new RemoteN2Agent(client, respMsg.getAgentUUID());
-    }
+        LoginResponseMessage.ResponseType response;
+        int agentId = -1;
+        if (msg.getMechanism() == LoginMessage.LoginMechanism.CREDENTIALS) {
+            response = LoginResponseMessage.ResponseType.SUCCESS;
+        } else {
+            try {
+                String sql = "SELECT `agent_id` FROM `agents` WHERE `auth_token` = ?;";
+                PreparedStatement statement = DBConnection.getConnection().prepareStatement(sql,
+                        ResultSet.TYPE_SCROLL_INSENSITIVE,
+                        ResultSet.CONCUR_READ_ONLY);
+                statement.setString(1, msg.getAuthToken());
+                statement.executeQuery();
+                ResultSet resultSet = statement.getResultSet();
+                resultSet.last();
+                if (resultSet.getRow() != 0) {
+                    agentId = resultSet.getInt("agent_id");
+                    response = LoginResponseMessage.ResponseType.SUCCESS;
+                } else {
+                    response = LoginResponseMessage.ResponseType.AUTH_TOKEN_EXPIRED;
+                }
+            } catch (SQLException ex) {
+                crit("Failed to authenticate NX2Agent using AUTH_TOKEN: %s", ex.getMessage());
+                response = LoginResponseMessage.ResponseType.INTERNAL_ERROR;
+            }
+        }
 
-    private String generateSecureToken() {
-        SecureRandom random = new SecureRandom();
-        byte bytes[] = new byte[128];
-        random.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        if (response != LoginResponseMessage.ResponseType.SUCCESS) {
+            client.Send(new LoginResponseMessage(response));
+            return;
+        }
+
+        RemoteN2Agent remoteClient = new RemoteN2Agent(client, agentId);
     }
 
 }
